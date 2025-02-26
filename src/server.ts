@@ -5,70 +5,96 @@ import { WebSocketServer } from "ws";
 import express from "express";
 import http from "http";
 import cors from "cors";
-import dotenv from "dotenv";
-import { createClient } from "redis";
+import { createClient, RedisClientType } from "redis";
 import { useServer } from "graphql-ws/lib/use/ws";
+import { RedisPubSub } from "graphql-redis-subscriptions";
+import { execute, subscribe } from "graphql";
 import typeDefs from "./graphql/schema";
 import resolvers from "./graphql/resolvers";
 
-dotenv.config();
+// Hosted Redis URL
+const REDIS_URL = "redis://livekit.dialdesk.cloud:6379";
 
-// Redis Setup with error handling
-const redisClient = createClient({ url: process.env.REDIS_URL || "redis://localhost:6379" });
+// Initialize Redis clients
+const redisClient: RedisClientType = createClient({ url: REDIS_URL });
 
-redisClient.on("error", (err) => {
-  console.error("Redis Error:", err);
-});
+redisClient.on("error", (err) => console.error("❌ Redis Error:", err));
 
-redisClient.connect().catch((err) => {
-  console.error("Failed to connect to Redis:", err);
-});
+async function initializeRedisPubSub(): Promise<RedisPubSub> {
+  await redisClient.connect();
+  const publisher = redisClient.duplicate();
+  const subscriber = redisClient.duplicate();
+  
+  await Promise.all([publisher.connect(), subscriber.connect()]);
+  
+  console.log("✅ Redis Pub/Sub initialized successfully.");
+  
+  return new RedisPubSub({
+    publisher: publisher as any,
+    subscriber: subscriber as any,
+  });
+}
+
+let pubsub: RedisPubSub | null = null;
+
+// Initialize PubSub
+(async () => {
+  try {
+    pubsub = await initializeRedisPubSub();
+  } catch (error) {
+    console.error("❌ Error initializing Redis PubSub:", error);
+  }
+})();
+
+// Create executable schema
+const schema = makeExecutableSchema({ typeDefs, resolvers });
 
 async function startServer() {
   const app = express();
   const httpServer = http.createServer(app);
 
-  const schema = makeExecutableSchema({ typeDefs, resolvers });
-
-  const wsServer = new WebSocketServer({ server: httpServer, path: "/graphql" });
+  // WebSocket setup for subscriptions
+  const wsServer = new WebSocketServer({
+    server: httpServer,
+    path: "/graphql",
+  });
 
   useServer(
     {
       schema,
-      context: () => ({ redisClient }),
+      execute,
+      subscribe,
+      context: async () => {
+        if (!pubsub) throw new Error("❌ PubSub is not initialized.");
+        console.log("✅ WebSocket Client Connected");
+        return { pubsub };
+      },
+      onConnect: () => console.log("🔄 WebSocket Connection Established"),
+      onClose: () => console.log("🔴 WebSocket Disconnected"),
     },
     wsServer
   );
 
-  const server = new ApolloServer({ 
-    schema,
-    csrfPrevention: false, // ✅ Disables CSRF Protection
-  });
-
+  // Initialize Apollo Server
+  const server = new ApolloServer({ schema });
   await server.start();
 
+  app.use(cors({ origin: "*", credentials: true }));
   app.use(
-    cors({
-      origin: "http://localhost:3000", // ✅ Allow requests from your frontend
-      credentials: true, // ✅ Allow cookies & auth headers
+    "/graphql",
+    express.json(),
+    expressMiddleware(server, {
+      context: async () => {
+        if (!pubsub) throw new Error("❌ PubSub is not initialized.");
+        return { pubsub };
+      },
     })
   );
 
-  // ✅ Updated CORS middleware to allow necessary headers
-  app.use(
-    "/graphql",
-    cors({
-      origin: "*", // Adjust this for security (e.g., specific frontend domain)
-      allowedHeaders: ["Content-Type", "x-apollo-operation-name"],
-      credentials: true,
-    }),
-    express.json(),
-    expressMiddleware(server, { context: async () => ({ redisClient }) })
-  );
-
-  const PORT = process.env.PORT || 4000;
-  httpServer.listen(PORT, () => {
-    console.log(`🚀 Server running at http://localhost:${PORT}/graphql`);
+  const PORT = 4000;
+  httpServer.listen(PORT, "0.0.0.0", () => {
+    console.log(`🚀 Server running at http://livekit.dialdesk.cloud:${PORT}/graphql`);
+    console.log(`📡 Subscriptions ready at ws://livekit.dialdesk.cloud:${PORT}/graphql`);
   });
 }
 
