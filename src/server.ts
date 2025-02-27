@@ -11,9 +11,12 @@ import { RedisPubSub } from "graphql-redis-subscriptions";
 import { execute, subscribe } from "graphql";
 import typeDefs from "./graphql/schema";
 import resolvers from "./graphql/resolvers";
+import dotenv from "dotenv";
+
+dotenv.config();
 
 // Hosted Redis URL
-const REDIS_URL = "redis://livekit.dialdesk.cloud:6379";
+const REDIS_URL = process.env.REDIS_URL as string;
 
 // Initialize Redis clients
 const redisClient: RedisClientType = createClient({ url: REDIS_URL });
@@ -91,10 +94,10 @@ async function startServer() {
     })
   );
 
-  const PORT = 4000;
+  const PORT = (process.env.GRAPHQL_PORT || 4000,10);
   httpServer.listen(PORT, "0.0.0.0", () => {
-    console.log(`🚀 Server running at http://livekit.dialdesk.cloud:${PORT}/graphql`);
-    console.log(`📡 Subscriptions ready at ws://livekit.dialdesk.cloud:${PORT}/graphql`);
+    console.log(`🚀 Server running at ${process.env.GRAPHQL_HTTP_URL}`);
+    console.log(`📡 Subscriptions ready at ${process.env.GRAPHQL_WS_URL}`);
   });
 }
 

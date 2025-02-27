@@ -2,14 +2,16 @@ import { RedisPubSub } from "graphql-redis-subscriptions";
 import { createClient, RedisClientType } from "redis";
 import axios from "axios";
 import { GraphQLResolveInfo } from "graphql";
+import dotenv from "dotenv";
+
+dotenv.config();
 
 const AGENT_ASSIGNED = "AGENT_ASSIGNED";
-const LIVEKIT_TOKEN_URL = "http://livekit.dialdesk.cloud:8080/auth/get-token";
+const LIVEKIT_TOKEN_URL = process.env.LIVEKIT_TOKEN_URL as string;
+const REDIS_URL = process.env.REDIS_URL as string;
 
 // Initialize Redis clients
-const redisClient: RedisClientType = createClient({
-  url: process.env.REDIS_URL || "redis://livekit.dialdesk.cloud:6379",
-});
+const redisClient: RedisClientType = createClient({ url: REDIS_URL });
 
 redisClient.on("error", (err) => console.error("❌ Redis Client Error:", err));
 
