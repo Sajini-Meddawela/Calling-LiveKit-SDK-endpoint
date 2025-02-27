@@ -1,44 +1,13 @@
-import { RedisPubSub } from "graphql-redis-subscriptions";
-import { createClient, RedisClientType } from "redis";
+import { PubSub } from "graphql-subscriptions";
 import axios from "axios";
-import { GraphQLResolveInfo } from "graphql";
 import dotenv from "dotenv";
 
 dotenv.config();
 
 const AGENT_ASSIGNED = "AGENT_ASSIGNED";
 const LIVEKIT_TOKEN_URL = process.env.LIVEKIT_TOKEN_URL as string;
-const REDIS_URL = process.env.REDIS_URL as string;
 
-// Initialize Redis clients
-const redisClient: RedisClientType = createClient({ url: REDIS_URL });
-
-redisClient.on("error", (err) => console.error("❌ Redis Client Error:", err));
-
-async function initializeRedisPubSub(): Promise<RedisPubSub> {
-  await redisClient.connect();
-  const publisher = redisClient.duplicate();
-  const subscriber = redisClient.duplicate();
-
-  await Promise.all([publisher.connect(), subscriber.connect()]);
-
-  console.log("✅ Redis Pub/Sub initialized successfully.");
-  return new RedisPubSub({
-    publisher: publisher as any,
-    subscriber: subscriber as any,
-  });
-}
-
-let pubsub: RedisPubSub | null = null;
-
-// Initialize PubSub
-(async () => {
-  try {
-    pubsub = await initializeRedisPubSub();
-  } catch (error) {
-    console.error("❌ Error initializing Redis PubSub:", error);
-  }
-})();
+const pubsub = new PubSub<{ AGENT_ASSIGNED: { agentAssigned: RoomToken } }>();
 
 interface RouteToAgentArgs {
   roomId: string;
@@ -51,28 +20,12 @@ interface RoomToken {
   token: string;
 }
 
-interface Context {
-  pubsub: RedisPubSub;
-}
-
 const resolvers = {
   Query: {
     getRoomToken: async (_: unknown, { roomId, agentId }: RouteToAgentArgs): Promise<RoomToken> => {
       try {
         console.log(`🔍 Fetching token for room: ${roomId}, agent: ${agentId}`);
-
-        if (!redisClient.isOpen) {
-          throw new Error("❌ Redis client is not connected.");
-        }
-
-        const token = await redisClient.hGet(`room:${roomId}`, agentId);
-
-        if (!token) {
-          console.warn(`⚠️ No token found in Redis for room ${roomId}, agent ${agentId}.`);
-          throw new Error("No active session found.");
-        }
-
-        return { agentId, roomId, token };
+        throw new Error("Fetching token directly is not supported in this implementation.");
       } catch (error) {
         console.error("❌ Error fetching token:", error);
         throw new Error("Failed to retrieve token.");
@@ -81,7 +34,7 @@ const resolvers = {
   },
 
   Mutation: {
-    routeToAgent: async (_: unknown, { roomId, agentId }: RouteToAgentArgs, { pubsub }: Context): Promise<RoomToken> => {
+    routeToAgent: async (_: unknown, { roomId, agentId }: RouteToAgentArgs): Promise<RoomToken> => {
       try {
         console.log(`🚀 Routing agent ${agentId} to room ${roomId}...`);
 
@@ -92,25 +45,9 @@ const resolvers = {
         }
 
         const token = response.data.token;
-
-        if (!redisClient.isOpen) {
-          throw new Error("❌ Redis client is not connected.");
-        }
-
-        await redisClient.hSet(`room:${roomId}`, agentId, token);
-
-        if (!pubsub) {
-          throw new Error("❌ Internal server error: PubSub not available.");
-        }
-
         const assignment: RoomToken = { agentId, roomId, token };
 
-        try {
-          await pubsub.publish(AGENT_ASSIGNED, { agentAssigned: assignment });
-        } catch (err) {
-          console.error("❌ Error publishing subscription event:", err);
-          throw new Error("Failed to notify subscribers.");
-        }
+        await pubsub.publish(AGENT_ASSIGNED, { agentAssigned: assignment });
 
         return assignment;
       } catch (error) {
@@ -122,24 +59,8 @@ const resolvers = {
 
   Subscription: {
     agentAssigned: {
-      subscribe: async (_: unknown, __: unknown, { pubsub }: Context) => {
-        if (!pubsub) {
-          throw new Error("❌ PubSub is not initialized.");
-        }
-
-        try {
-          return pubsub.asyncIterator<RoomToken>(AGENT_ASSIGNED);
-        } catch (err) {
-          console.error("❌ Error in subscription:", err);
-          throw new Error("Subscription error occurred.");
-        }
-      },
-      resolve: (payload: { agentAssigned: RoomToken }) => {
-        if (!payload || !payload.agentAssigned) {
-          throw new Error("No agent assigned.");
-        }
-        return payload.agentAssigned;
-      },
+      subscribe: () => pubsub.asyncIterableIterator(AGENT_ASSIGNED),
+      resolve: (payload: { agentAssigned: RoomToken }) => payload.agentAssigned,
     },
   },
 };

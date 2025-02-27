@@ -1,6 +1,4 @@
-import { gql } from "graphql-tag";
-
-const typeDefs = gql`
+const typeDefs = `#graphql
   type Assignment {
     agentId: String!
     roomId: String!
