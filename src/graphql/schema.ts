@@ -5,16 +5,24 @@ const typeDefs = `#graphql
     token: String!
   }
 
+  input RouteToAgentInput {
+    roomId: String!
+    session: String!
+    agentType: String!
+    department: String!
+    languages: [String!]!
+  }
+
   type Query {
     getRoomToken(roomId: String!, agentId: String!): Assignment!
   }
 
   type Mutation {
-    routeToAgent(roomId: String!, agentId: String!): Assignment!
+    routeToAgent(input: RouteToAgentInput!): Assignment!
   }
 
   type Subscription {
-    agentAssigned: Assignment
+    agentAssigned(department: String!, languages: [String!]!): Assignment!
   }
 `;
 

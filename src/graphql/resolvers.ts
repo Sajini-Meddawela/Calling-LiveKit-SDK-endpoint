@@ -1,28 +1,35 @@
 import { PubSub } from "graphql-subscriptions";
 import axios from "axios";
 import dotenv from "dotenv";
+import { withFilter } from "graphql-subscriptions";
 
 dotenv.config();
 
 const AGENT_ASSIGNED = "AGENT_ASSIGNED";
 const LIVEKIT_TOKEN_URL = process.env.LIVEKIT_TOKEN_URL as string;
+const PICK_AGENT_URL = "https://livekit.dialdesk.cloud/api/v1/agents/pick";
 
 const pubsub = new PubSub<{ AGENT_ASSIGNED: { agentAssigned: RoomToken } }>();
 
-interface RouteToAgentArgs {
+interface RouteToAgentInput {
   roomId: string;
-  agentId: string;
+  session: string;
+  agentType: string;
+  department: string;
+  languages: string[];
 }
 
 interface RoomToken {
   agentId: string;
   roomId: string;
   token: string;
+  department: string;
+  languages: string[]; 
 }
 
 const resolvers = {
   Query: {
-    getRoomToken: async (_: unknown, { roomId, agentId }: RouteToAgentArgs): Promise<RoomToken> => {
+    getRoomToken: async (_: unknown, { roomId, agentId }: { roomId: string, agentId: string }): Promise<RoomToken> => {
       try {
         console.log(`🔍 Fetching token for room: ${roomId}, agent: ${agentId}`);
         throw new Error("Fetching token directly is not supported in this implementation.");
@@ -34,20 +41,33 @@ const resolvers = {
   },
 
   Mutation: {
-    routeToAgent: async (_: unknown, { roomId, agentId }: RouteToAgentArgs): Promise<RoomToken> => {
+    routeToAgent: async (_: unknown, { input }: { input: RouteToAgentInput }): Promise<RoomToken> => {
       try {
-        console.log(`🚀 Routing agent ${agentId} to room ${roomId}...`);
+        console.log(`🚀 Routing agent to room ${input.roomId}...`);
 
-        const response = await axios.post(LIVEKIT_TOKEN_URL, { agentId, roomId });
+        // Fetch agent assignment details from PICK_AGENT_URL
+        const pickAgentResponse = await axios.post(PICK_AGENT_URL, input);
 
-        if (!response.data?.token) {
+        if (!pickAgentResponse.data?.roomId) {
+          throw new Error("Failed to pick a room.");
+        }
+
+        const { roomId, department, languages } = pickAgentResponse.data;
+
+        // Fetch LiveKit token for the room
+        const tokenResponse = await axios.post(LIVEKIT_TOKEN_URL, { roomId });
+
+        if (!tokenResponse.data?.token) {
           throw new Error("Failed to generate token.");
         }
 
-        const token = response.data.token;
-        const assignment: RoomToken = { agentId, roomId, token };
+        const token = tokenResponse.data.token;
+        const assignment: RoomToken = { agentId: "N/A", roomId, token, department, languages };
 
-        await pubsub.publish(AGENT_ASSIGNED, { agentAssigned: assignment });
+        // Publish the assignment to the correct agents
+        await pubsub.publish(AGENT_ASSIGNED, {
+          agentAssigned: assignment
+        });
 
         return assignment;
       } catch (error) {
@@ -59,7 +79,18 @@ const resolvers = {
 
   Subscription: {
     agentAssigned: {
-      subscribe: () => pubsub.asyncIterableIterator(AGENT_ASSIGNED),
+      subscribe: withFilter(
+        () => pubsub.asyncIterableIterator(AGENT_ASSIGNED),
+        (payload, variables) => {
+          // Filter agents based on department and languages
+          return (
+            payload.agentAssigned.department === variables.department &&
+            variables.languages.every((lang: string) =>
+              payload.agentAssigned.languages.includes(lang)
+            )
+          );
+        }
+      ),
       resolve: (payload: { agentAssigned: RoomToken }) => payload.agentAssigned,
     },
   },

@@ -14,24 +14,19 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-// Hosted Redis URL
 const REDIS_URL = process.env.REDIS_URL as string;
 
-// Initialize Redis client
 const redisClient: RedisClientType = createClient({ url: REDIS_URL });
 redisClient.on("error", (err) => console.error("❌ Redis Error:", err));
 
-// Create PubSub instance
 const pubsub = new PubSub();
 
-// Create executable schema
 const schema = makeExecutableSchema({ typeDefs, resolvers });
 
 async function startServer() {
   const app = express();
   const httpServer = http.createServer(app);
 
-  // WebSocket setup for subscriptions
   const wsServer = new WebSocketServer({
     server: httpServer,
     path: "/graphql",
@@ -50,7 +45,6 @@ async function startServer() {
     wsServer
   );
 
-  // Initialize Apollo Server
   const server = new ApolloServer({ schema });
   await server.start();
 
@@ -60,8 +54,7 @@ async function startServer() {
     express.json(),
     expressMiddleware(server, {
       context: async ({ req }) => {
-        const agentId = req.headers["x-agent-id"];
-        return { pubsub, agentId };
+        return { pubsub };
       },
     })
   );
